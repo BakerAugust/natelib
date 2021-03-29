@@ -6,6 +6,7 @@ from numpy.random import default_rng
 from numpy import linalg as LA
 from pandas import DataFrame
 import matplotlib.pyplot as plt
+from sklearn.utils.extmath import svd_flip
 
 
 def svd(A: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -22,10 +23,12 @@ def svd(A: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     Sigma: np.ndarray - matrix of singular values on the diagonal
     V : np.ndarray - right singular vectors
     """
-
-    _, U = LA.eig(np.matmul(A, A.transpose()))
-    lamdas, V = LA.eig(np.dot(A.transpose(), A))
+    # _, U = LA.eig(np.matmul(A, A.transpose()))
+    lamdas, V = LA.eig(np.matmul(A.transpose(), A))
     S = np.sqrt(lamdas)
+    
+    # Get U based on V and S
+    U = np.dot(A, LA.inv(V.transpose())) / S  # inefficient, but ¯\_(ツ)_/¯
     return U, S, V.transpose()
 
 
@@ -50,13 +53,20 @@ class PCA:
         if not scaled:
             self.data = minmax_scale(self.data)
 
-        _, S, V = svd(self.data)
+        U, S, Vt = svd(self.data)
+        U, Vt = svd_flip(U, Vt)  # Ensures deterministic output
 
-        self.components = np.flip(np.take(V, np.argsort(S), axis=1))
+        self.components = Vt
         self.singular_values = np.flip(np.sort(S))
         self.explained_variance_ratio = PCA._calc_exlpained_variance_ratio(
             self.singular_values
         )
+
+    def transform(self, n_components: int) -> np.ndarray:
+        """
+        Transforms data into specified number of principal components
+        """
+        return np.dot(self.data, self.components[:n_components].transpose())
 
     def loading_plot(self, index: int) -> tuple[plt.Figure, plt.Axes]:
         """
