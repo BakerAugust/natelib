@@ -4,23 +4,9 @@ from numpy.core.numeric import allclose
 from sklearn.decomposition import PCA as skPCA
 from sklearn import datasets
 import matplotlib.pyplot as plt
-from pedagogy.pca import svd, PCA
+from pedagogy.pca import PCA
 
 np.set_printoptions(suppress=True)
-
-
-def test_svd() -> None:
-    A = np.array([[1, 2, 1],
-                  [3, 4, 1],
-                  [5, 6, 1]])
-    U, S, V = svd(A)
-    # U_, S_, V_ = LA.svd(A, full_matrices=True)
-    # smat = np.diag(S)
-    print(U.shape, S.shape, V.shape)
-    # print(U_.shape, S_.shape, V_.shape)
-    print(V)
-    print(U)
-    print(A, np.dot(U[:, :3] * S, V))
 
 
 def test_PCA() -> None:
@@ -32,7 +18,7 @@ def test_PCA() -> None:
     pca.fit(data)
 
     new_X = pca.transform(2)
-    fig, axarr = plt.subplots(1,2)
+    _, axarr = plt.subplots(1,2)
     axarr[0].scatter(new_X[:, 0], new_X[:, 1], c=y)
     print(pca.singular_values)
     print(pca.components)
@@ -48,7 +34,6 @@ def test_PCA() -> None:
 
 
 if __name__ == '__main__':
-    # test_svd()
     test_PCA()
     
 
