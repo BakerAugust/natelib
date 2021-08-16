@@ -35,5 +35,4 @@ def test_PCA() -> None:
 
 if __name__ == '__main__':
     test_PCA()
-    
 
