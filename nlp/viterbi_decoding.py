@@ -51,9 +51,10 @@ class ViterbiDecoder:
 
     def _parse_features(self, raw_feats: List[str]) -> None:
         """
-        Parses list of string features into dictionaries of transmission features (t_feats)
-        and emission features (e_feats) for fast lookups and stores as class attributes.
-        Also generates a list of all labels.
+        Parses list of string features into dictionaries of transmission
+        features (t_feats) and emission features (e_feats) for fast
+        lookups and stores as class attributes. Also generates a list of
+        all labels.
 
         E_feats takes the following form:
         key = <token> e.g. 'Dog'
