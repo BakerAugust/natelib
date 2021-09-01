@@ -213,7 +213,8 @@ def batch_decode(vd: ViterbiDecoder, file_path: str, test: bool) -> None:
                 break
     pct_correct = correct / (correct + incorrect) * 100
     print(
-        f"{correct} of {correct + incorrect} ({round(pct_correct,4)}%) tokens accurately labeled!"
+        f"{correct} of {correct + incorrect} ({round(pct_correct,4)}%)"
+        "tokens accurately labeled!"
     )
 
 
