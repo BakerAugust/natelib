@@ -8,18 +8,10 @@
 import sys
 import numpy as np
 import time
+import torch
 from typing import List, Tuple
-from dataclasses import dataclass
 
-
-@dataclass
-class LabeledToken:
-    """
-    Token + label ADT
-    """
-
-    token: str
-    label: str = None
+from torch.functional import Tensor
 
 
 class ViterbiDecoder:
@@ -33,7 +25,7 @@ class ViterbiDecoder:
     Usage
     ========
     ```
-    sequence = ["Jim", "walks", "Joe", "'s", "dog", "."]
+    sequence = ['No', ',', 'it', 'was', "n't", 'Black', 'Monday', '.']
     path = "path/to/my/weights.txt"
 
     vb = ViterbiDecoder()
@@ -47,7 +39,41 @@ class ViterbiDecoder:
     """
 
     def __init__(self) -> None:
+        self.labels = None
         pass
+
+    def _make_transition_tensor(self, t_feat_tuples: List[tuple]) -> Tensor:
+        """
+        Builds a t x t' tensor transition matrix for pos.
+        """
+        if not self.labels:
+            raise AttributeError("Labels are not yet set!")
+
+        t_feats = torch.full(
+            size=(len(self.labels), len(self.labels)), fill_value=np.NINF
+        )
+        t_feats[0, :] = 0  # Transition from 'START' to any other POS
+
+        for t in t_feat_tuples:
+            t_feats[self.labels.index(t[0]), self.labels.index(t[1])] = t[2]
+        return t_feats
+
+    def _make_emission_tensor(self, e_feat_dict: dict) -> Tuple[Tensor, dict]:
+        """
+        Make a tensor matrix of emissions weights of size(t x n_words)
+
+        Returns the tensor matrix and a dict for index the tensor by token.
+        """
+        e_idx_lookup = {}
+        e_feats = torch.zeros(size=(len(self.labels), len(e_feat_dict.keys())))
+        token_idx = 0
+        for key, vals in e_feat_dict.items():
+            e_idx_lookup[key] = token_idx
+            for pos, weight in zip(vals["pos"], vals["weight"]):
+                e_feats[self.labels.index(pos), token_idx] = weight
+            token_idx += 1
+
+        return e_feats, e_idx_lookup
 
     def _parse_features(self, raw_feats: List[str]) -> None:
         """
@@ -66,8 +92,8 @@ class ViterbiDecoder:
         value = {'pos_i+1': <list of labels>,
                  'weight': <list of weights>}
         """
-        t_feats = {}
-        e_feats = {}
+        t_feat_tuples = []
+        e_feat_dict = {}
         labels = set()
         for feat_str in raw_feats:
             split = feat_str.strip("\n").split(" ")
@@ -81,30 +107,26 @@ class ViterbiDecoder:
             # If emission feat, add to e_feat dict
             if feat_split[0] == "E":
                 token = feat_split[2]
-                d = e_feats.get(token, None)
+                d = e_feat_dict.get(token, None)
                 if d:
                     d["pos"].append(pos_i)
                     d["weight"].append(weight)
                 else:
-                    e_feats[token] = {"pos": [feat_split[1]], "weight": [weight]}
+                    e_feat_dict[token] = {"pos": [feat_split[1]], "weight": [weight]}
                 labels.add(pos_i)
 
             # If transmission feat add to t_feat dict
             elif feat_split[0] == "T":
                 pos_i_plus = feat_split[2]
-                d = t_feats.get(pos_i, None)
-                if d:
-                    d["pos_i_plus"].append(pos_i_plus)
-                    d["weight"].append(weight)
-                else:
-                    t_feats[pos_i] = {"pos_i_plus": [pos_i_plus], "weight": [weight]}
+                t_feat_tuples.append((pos_i, pos_i_plus, weight))
                 labels.update([pos_i, pos_i_plus])
             else:
                 raise ValueError(f"Unsupported feature type {feat_split[0]}!")
 
-        self.t_feats = t_feats
-        self.e_feats = e_feats
         self.labels = list(labels)
+        self.labels.insert(0, "START")
+        self.t_feats = self._make_transition_tensor(t_feat_tuples)
+        self.e_feats, self.e_idx_lookup = self._make_emission_tensor(e_feat_dict)
 
     def load_weights(self, path: str) -> None:
         """
@@ -115,25 +137,21 @@ class ViterbiDecoder:
 
         self._parse_features(lines)
 
-    def score(self, f_i: LabeledToken, f_i_minus: LabeledToken) -> float:
+    def score(self, token: str, t: int, t_prime: int) -> float:
         """
         Objective function.
         """
         score = 0
 
         # get score for emission features
-        e_dict = self.e_feats.get(f_i.token)
+        e_dict = self.e_feats.get(token)
         if e_dict:
             for pos, weight in zip(e_dict["pos"], e_dict["weight"]):
-                if pos == f_i.label:
+                if pos == self.labels[t]:
                     score += weight
 
         # get score for transition features
-        t_dict = self.t_feats.get(f_i_minus.label)
-        if t_dict:
-            for pos_i_plus, weight in zip(t_dict["pos_i_plus"], t_dict["weight"]):
-                if pos_i_plus == f_i.label:
-                    score += weight
+        score += self.t_feats[t_prime, t]
 
         return score
 
@@ -146,28 +164,32 @@ class ViterbiDecoder:
         """
         # Instantiate a TxN array of -inf
         # Insert start and set to 0
-        T = self.labels.copy()
         X = sequence.copy()
-        T.insert(0, "START")
-        X.insert(0, "START")
-        delta = np.ones(shape=(len(X), len(T))) * np.NINF
+        X.insert(0, "START")  # TODO -- do this as a batch in the big tensor
+        delta = torch.full(size=(len(X), len(self.labels)), fill_value=np.NINF)
         delta[0, 0] = 0
 
-        for i in range(len(X)):
-            f_i = LabeledToken(X[i])
-            f_i_minus = LabeledToken(X[i - 1])
-
-            # Get subset of emissions features relevent to current sequence
+        for i in range(1, len(X)):
             t_prime = delta[i - 1].argmax()
-            f_i_minus.label = T[t_prime]
-            for t in range(len(T)):
-                f_i.label = T[t]
-                score = self.score(f_i, f_i_minus)
-                delta[i, t] = max(delta[i, t], delta[i - 1, t_prime] + score)
+            token = X[i]
+
+            token_idx = self.e_idx_lookup.get(token, None)
+            if token_idx != None:
+                delta[i, :] = (
+                    self.t_feats[t_prime, :]  # t x 1 tensor
+                    + self.e_feats[:, token_idx]  # t x 1 tensor
+                    + delta[i - 1, t_prime]  # scalar
+                )
+            else:
+                delta[i, :] = (
+                    self.t_feats[t_prime, :]  # t x 1 tensor
+                    + delta[i - 1, t_prime]  # scalar
+                )
 
         # Walkback to find viterbi path
-        v_path = [T[i] for i in delta.argmax(axis=1)]
-        v_score = sum(delta.max(axis=1))
+        vals, idxs = delta.max(1)
+        v_path = [self.labels[i] for i in idxs]
+        v_score = vals.sum()
         return v_score, v_path[1:]  # Skip the "start" label
 
 
@@ -227,6 +249,9 @@ def test_toy_example():
     raw_features = [
         "E_NNP_Jim 3.90848\n",
         "T_NNP_VBZ 6.50722\n",
+        "T_NN_. 7.50722\n",
+        "T_POS_NN 8.50722\n",
+        "T_VBZ_NNP 9.50722\n",
         "E_VBZ_walks 3.80798\n",
         "T_NNP_POS 9.11345\n",
         "E_NN_dog 2.50497\n",
@@ -235,8 +260,10 @@ def test_toy_example():
 
     vd = ViterbiDecoder()
     vd._parse_features(raw_features)
-    print(vd.score(LabeledToken("walks", "VBZ"), LabeledToken("Jim", "NNP")))
     print(vd.t_feats)
+    print(vd.labels)
+    print(vd.e_idx_lookup)
+    print(vd.e_feats)
     start = time.time()
     v_score, v_path = vd.decode(sequence)
     end = time.time()
@@ -249,14 +276,20 @@ if __name__ == "__main__":
 
     if (len(args) == 4) and (args[3] == "--test"):
         test = True
+        # test_toy_example()
     else:
         test = False
 
     # Instantiate our decoder and load weights
     vd = ViterbiDecoder()
+    start = time.time()
     vd.load_weights(args[1])
-
+    end = time.time()
+    print(f"{round(end-start, 4)} seconds to parse and initialize features.")
     # Load up the test data
     test_data_path = args[2]
 
+    start = time.time()
     batch_decode(vd, test_data_path, test)
+    end = time.time()
+    print(f"{round(end-start, 4)} seconds to decode.")
