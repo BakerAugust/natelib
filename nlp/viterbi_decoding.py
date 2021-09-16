@@ -3,8 +3,6 @@
 # Author: Nate August
 # Course: CSC 448
 
-# from the command line, run:
-# python csc448/hw1/hw1.py "/u/cs248/data/pos/train.weights" "/u/cs248/data/pos/test"
 import sys
 import numpy as np
 import time
@@ -49,9 +47,7 @@ class ViterbiDecoder:
         if not self.labels:
             raise AttributeError("Labels are not yet set!")
 
-        t_feats = torch.full(
-            size=(len(self.labels), len(self.labels)), fill_value=np.NINF
-        )
+        t_feats = torch.full(size=(len(self.labels), len(self.labels)), fill_value=0)
         t_feats[0, :] = 0  # Transition from 'START' to any other POS
 
         for t in t_feat_tuples:
@@ -165,32 +161,45 @@ class ViterbiDecoder:
         # Instantiate a TxN array of -inf
         # Insert start and set to 0
         X = sequence.copy()
-        X.insert(0, "START")  # TODO -- do this as a batch in the big tensor
-        delta = torch.full(size=(len(X), len(self.labels)), fill_value=np.NINF)
+        X.insert(0, "START")
+        # TODO change the dims of this tensor to avoid the transpose
+        # May need to refactor the e_feat tensor as well....
+        delta = torch.full(size=(len(self.labels), len(X)), fill_value=np.NINF)
+        backpointers = torch.full(size=(len(self.labels), len(X)), fill_value=np.NINF)
         delta[0, 0] = 0
+        backpointers[0, 0] = 0
 
         for i in range(1, len(X)):
-            t_prime = delta[i - 1].argmax()
             token = X[i]
-
             token_idx = self.e_idx_lookup.get(token, None)
             if token_idx != None:
-                delta[i, :] = (
-                    self.t_feats[t_prime, :]  # t x 1 tensor
-                    + self.e_feats[:, token_idx]  # t x 1 tensor
-                    + delta[i - 1, t_prime]  # scalar
-                )
+                delta[:, i], backpointers[:, i] = (
+                    torch.transpose(
+                        self.t_feats[:, :] + delta[:, i - 1, None],
+                        0,
+                        1,
+                    )
+                    + self.e_feats[:, token_idx, None]
+                ).max(1)
             else:
-                delta[i, :] = (
-                    self.t_feats[t_prime, :]  # t x 1 tensor
-                    + delta[i - 1, t_prime]  # scalar
-                )
+                delta[:, i], backpointers[:, i] = torch.transpose(
+                    self.t_feats[:, :] + delta[:, i - 1, None],
+                    0,
+                    1,
+                ).max(1)
 
         # Walkback to find viterbi path
-        vals, idxs = delta.max(1)
-        v_path = [self.labels[i] for i in idxs]
-        v_score = vals.sum()
-        return v_score, v_path[1:]  # Skip the "start" label
+        v_score, final_t = delta[:, len(X) - 1].max(0)
+        v_path = [final_t.item()]
+        walkback_idx = len(X) - 1
+        while walkback_idx >= 1:
+            v_path.insert(
+                0,
+                backpointers[int(v_path[0]), walkback_idx].item(),
+            )
+            walkback_idx -= 1
+        v_path_labels = [self.labels[int(i)] for i in v_path]
+        return v_score, v_path_labels[1:]  # Skip the "start" label
 
 
 def batch_decode(vd: ViterbiDecoder, file_path: str, test: bool) -> None:
@@ -237,7 +246,7 @@ def batch_decode(vd: ViterbiDecoder, file_path: str, test: bool) -> None:
     pct_correct = correct / (correct + incorrect) * 100
     print(
         f"{correct} of {correct + incorrect} ({round(pct_correct,4)}%)"
-        "tokens accurately labeled!"
+        " tokens accurately labeled!"
     )
 
 
@@ -276,7 +285,7 @@ if __name__ == "__main__":
 
     if (len(args) == 4) and (args[3] == "--test"):
         test = True
-        # test_toy_example()
+        test_toy_example()
     else:
         test = False
 
