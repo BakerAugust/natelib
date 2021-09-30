@@ -26,7 +26,7 @@ def svd(A: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     # _, U = LA.eig(np.matmul(A, A.transpose()))
     lamdas, V = LA.eig(np.matmul(A.transpose(), A))
     S = np.sqrt(lamdas)
-    
+
     # Get U based on V and S
     U = np.dot(A, LA.inv(V.transpose())) / S  # inefficient, but ¯\_(ツ)_/¯
     return U, S, V.transpose()
@@ -76,7 +76,7 @@ class PCA:
         ax.bar(self.labels, self.components[index])
         return fig, ax
 
-    def explained_variance_plot(self) -> tuple[plt.Figure, plt.Axes]:
+    def explained_variance_plot(self) -> Tuple[plt.Figure, plt.Axes]:
         """
         Creates a plot with the cumulative explained variance.
         """
