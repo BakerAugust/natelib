@@ -99,25 +99,28 @@ class ViterbiDecoder:
 
             feat_split = feat.split("_")
             pos_i = feat_split[1]
+            if weight > 0:
+                # If emission feat, add to e_feat dict
+                if feat_split[0] == "E":
+                    token = feat_split[2]
+                    d = e_feat_dict.get(token, None)
+                    if d:
+                        d["pos"].append(pos_i)
+                        d["weight"].append(weight)
+                    else:
+                        e_feat_dict[token] = {
+                            "pos": [feat_split[1]],
+                            "weight": [weight],
+                        }
+                    labels.add(pos_i)
 
-            # If emission feat, add to e_feat dict
-            if feat_split[0] == "E":
-                token = feat_split[2]
-                d = e_feat_dict.get(token, None)
-                if d:
-                    d["pos"].append(pos_i)
-                    d["weight"].append(weight)
+                # If transmission feat add to t_feat dict
+                elif feat_split[0] == "T":
+                    pos_i_plus = feat_split[2]
+                    t_feat_tuples.append((pos_i, pos_i_plus, weight))
+                    labels.update([pos_i, pos_i_plus])
                 else:
-                    e_feat_dict[token] = {"pos": [feat_split[1]], "weight": [weight]}
-                labels.add(pos_i)
-
-            # If transmission feat add to t_feat dict
-            elif feat_split[0] == "T":
-                pos_i_plus = feat_split[2]
-                t_feat_tuples.append((pos_i, pos_i_plus, weight))
-                labels.update([pos_i, pos_i_plus])
-            else:
-                raise ValueError(f"Unsupported feature type {feat_split[0]}!")
+                    raise ValueError(f"Unsupported feature type {feat_split[0]}!")
 
         self.labels = list(labels)
         self.labels.insert(0, "START")
