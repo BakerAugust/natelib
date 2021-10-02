@@ -178,7 +178,7 @@ class FPTree:
             node = node.parent
         all_combos = powerset(path_items)
         for itemset in all_combos:
-            if count > self.min_sup:
+            if count >= self.min_sup:
                 frequent_items[itemset] = count
         return frequent_items
 
