@@ -53,14 +53,15 @@ def find_candidates(k: int, L_minus: dict) -> List[str]:
         for i2 in L_minus.keys():
             if i1[: k - 1] == i2[: k - 1] and (i1[-1] > i2[-1]):
                 c = (i2[-1],) + i1
-                print(c)
                 # Prune those with infrequent subset
                 if not has_infrequent_subset(c, L_minus.keys()):
                     candidates.append(c)
     return candidates
 
 
-def apriori(transactions: List[List[str]], min_sup: Union[int, float]) -> dict:
+def apriori(
+    transactions: List[Union[List[str], tuple]], min_sup: Union[int, float]
+) -> dict:
     """
     Apriori algorithm for mining frequent patterns as first proposed
     by [Agrawal and Srikant (1994)](http://www.vldb.org/conf/1994/P487.PDF).
