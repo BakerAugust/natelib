@@ -21,6 +21,10 @@ def generate_test_data() -> Tuple[List[List[str]], dict]:
         ("D"),
         ("B", "C", "D"),
         ("C", "D"),
+        ("W", "X", "Y", "Z"),
+        ("W", "X", "Y", "Z"),
+        ("W", "X", "Y", "Z"),
+        ("W", "X", "Y", "Z"),
     ]
 
     counts = {
@@ -40,6 +44,21 @@ def generate_test_data() -> Tuple[List[List[str]], dict]:
         ("C", "D"): 3,
         ("D",): 5,
         ("F",): 1,
+        ("W",): 4,
+        ("W", "X"): 4,
+        ("W", "Y"): 4,
+        ("W", "Z"): 4,
+        ("W", "X", "Y"): 4,
+        ("W", "X", "Z"): 4,
+        ("W", "Y", "Z"): 4,
+        ("W", "X", "Y", "Z"): 4,
+        ("X",): 4,
+        ("X", "Y"): 4,
+        ("X", "Z"): 4,
+        ("X", "Y", "Z"): 4,
+        ("Y",): 4,
+        ("Y", "Z"): 4,
+        ("Z",): 4,
     }
 
     return transactions, counts
@@ -72,9 +91,10 @@ def test_apriori():
 
         # Test for ratio MIN_SUP
         l = apriori(transactions, min_sup=(min_sup / len(transactions)))
+        assert len(l) == len([c for c in counts.values() if c > min_sup])
         for k, v in l.items():
             if v > min_sup:
-                assert counts[k] == v
+                assert counts[tuple(sorted(k))] == v
 
 
 def test_txsort():
@@ -118,7 +138,7 @@ def test_fpgrowth():
 
     # Check top level
     level_1 = fptree.root.children
-    assert len(level_1) == 2
+    assert len(level_1) == 3
 
     # Check a node in the top level
     D_node = fptree.header_table[("D",)]
@@ -133,9 +153,10 @@ def test_fpgrowth():
         fpt1 = FPTree()
         fpt1.fit(transactions, min_sup)
         l = fpt1.mine()
+        assert len(l) == len([c for c in counts.values() if c >= min_sup])
         for k, v in l.items():
             if v > min_sup:
-                assert counts[k] == v
+                assert counts[tuple(sorted(k))] == v
 
         # Test for ratio MIN_SUP
         # Multiply by 10 to increase number of tranactions
