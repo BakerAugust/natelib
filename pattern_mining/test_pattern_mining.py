@@ -4,6 +4,7 @@ import time
 from typing import Tuple, List
 from pattern_mining.apriori import find_frequent, apriori
 from pattern_mining.FPGrowth import powerset, txsort, FPTree
+import pandas as pd
 
 MIN_SUPS = [2, 3, 4, 5]
 
@@ -86,15 +87,26 @@ def test_apriori():
         transactions, counts = generate_test_data()
         l = apriori(transactions, min_sup=min_sup)
         for k, v in l.items():
-            if v > min_sup:
+            if v >= min_sup:
                 assert counts[k] == v
 
         # Test for ratio MIN_SUP
         l = apriori(transactions, min_sup=(min_sup / len(transactions)))
-        assert len(l) == len([c for c in counts.values() if c > min_sup])
+        assert len(l) == len([c for c in counts.values() if c >= min_sup])
         for k, v in l.items():
-            if v > min_sup:
+            if v >= min_sup:
                 assert counts[tuple(sorted(k))] == v
+
+    # Test for some strings with len>1
+    transactions = [
+        ("one",),
+        ("one", "two"),
+        ("one", "three"),
+        ("three", "two"),
+        ("two", "one"),
+    ]
+    l = apriori(transactions, min_sup=2)
+    assert l == {("one",): 4, ("two",): 3, ("three",): 2, ("one", "two"): 2}
 
 
 def test_txsort():
@@ -144,7 +156,6 @@ def test_fpgrowth():
     D_node = fptree.header_table[("D",)]
     assert D_node.count == 5
     assert D_node.item == ("D",)
-    assert D_node.level == 1
     assert len(D_node.children) == 2
     assert sum([c.count for c in D_node.children]) == 4
 
@@ -155,7 +166,7 @@ def test_fpgrowth():
         l = fpt1.mine()
         assert len(l) == len([c for c in counts.values() if c >= min_sup])
         for k, v in l.items():
-            if v > min_sup:
+            if v >= min_sup:
                 assert counts[tuple(sorted(k))] == v
 
         # Test for ratio MIN_SUP
@@ -164,38 +175,122 @@ def test_fpgrowth():
         fpt2.fit(transactions * 10, min_sup=(min_sup / len(transactions) * 10))
         l = fpt2.mine()
         for k, v in l.items():
-            if v > min_sup:
+            if v >= min_sup:
                 assert counts[tuple(sorted(k))] * 10 == v
+
+    # Test for some strings with len>1
+    transactions = [
+        ("one",),
+        ("one", "two"),
+        ("one", "three"),
+        ("three", "two"),
+        ("two", "one"),
+    ]
+    counts = {("one",): 4, ("two",): 3, ("three",): 2, ("two", "one"): 2}
+    fpt3 = FPTree()
+    fpt3.fit(transactions, min_sup=2)
+    l = fpt3.mine()
+    assert len(l) == len(counts)
+    for k, v in l.items():
+        assert counts[k] == v
+
+
+def fpgrowth_mine(transactions, min_sup) -> dict:
+    """
+    Wrapper to make FPGrowth api consistent.
+    """
+    fpt = FPTree()
+    fpt.fit(transactions, min_sup)
+    return fpt.mine()
+
+
+def apriori_basic(transactions, min_sup) -> dict:
+    """
+    Wrapper to make apriori without tx pruning api consistent.
+    """
+    return apriori(transactions, min_sup, prune_infrequent=False)
+
+
+def timetrial(fn, transactions, min_sup) -> float:
+    start = time.time()
+    fn(
+        transactions=transactions,
+        min_sup=min_sup,
+    )
+    end = time.time()
+    return end - start
 
 
 def compare_performance():
-    SAMPLE_SIZES = [2 ** n for n in range(15)]
-    MIN_SUP = 0.25
-    transactions, _ = generate_test_data()
-    apriori_times = []
-    fpgrowth_times = []
-    for sample_size in SAMPLE_SIZES:
-        samples = random.choices(transactions, k=sample_size)
+    """
+    Compare runtime on adult census dataset.
+    """
+    # Percent of data to run against
+    SAMPLE_SIZES = [0.10, 0.25, 0.5, 0.75, 1]
 
-        start = time.time()
-        a = apriori(samples, min_sup=MIN_SUP)
-        end = time.time()
-        apriori_times.append(end - start)
+    # Limit the max number of items allowed per transation
+    MAX_TX_LENGTH = [3, 6, 9]
 
-        start = time.time()
-        fpt = FPTree()
-        fpt.fit(samples, min_sup=MIN_SUP)
-        b = fpt.mine()
-        end = time.time()
-        fpgrowth_times.append(end - start)
+    # Differing levels of support
+    MIN_SUPS = [0.5, 0.25, 0.10, 0.5, 0.25, 0.01]
 
-    plt.plot(SAMPLE_SIZES, apriori_times, label="apriori")
-    plt.plot(SAMPLE_SIZES, fpgrowth_times, label="fpgrowth")
-    plt.legend()
+    FUNCTIONS = [
+        ("apriori_basic", apriori_basic),
+        ("apriori_tx_pruning", apriori),
+        ("fpgrowth", fpgrowth_mine),
+    ]
+
+    # Our data
+    adult = pd.read_csv("data/adult.data", header=None)
+    adult.drop(
+        labels=adult.dtypes[adult.dtypes == "int64"].index.to_list(),
+        axis=1,
+        inplace=True,
+    )
+    transactions = adult.values
+
+    # Time as a function of N transactions
+    size_trials = [[], [], []]
+    for s in SAMPLE_SIZES:
+        tx_subset = transactions[: round(len(transactions) * s), :]
+        for i, fn in enumerate(FUNCTIONS):
+            size_trials[i].append(timetrial(fn[1], tx_subset, min_sup=0.05))
+
+    # Time as a function of TX length
+    tx_length_trials = [[], [], []]
+    for n_cols in MAX_TX_LENGTH:
+        tx_subset = adult[adult.columns[:n_cols]].values
+        for i, fn in enumerate(FUNCTIONS):
+            tx_length_trials[i].append(timetrial(fn[1], tx_subset, min_sup=0.05))
+
+    # Time as a function of min_sup
+    min_sup_trials = [[], [], []]
+    tx_subset = transactions[: len(transactions) // 4, :]  # reduce for timeliness
+    for min_sup in MIN_SUPS:
+        for i, fn in enumerate(FUNCTIONS):
+            min_sup_trials[i].append(timetrial(fn[1], tx_subset, min_sup=min_sup))
+
+    # Plot everything
+    fig, axs = plt.subplots(3, 1)
+    for i, data in enumerate(size_trials):
+        axs[0].plot(SAMPLE_SIZES, data, label=FUNCTIONS[i][0])
+    axs[0].set_xlabel("Number of transactions")
+    axs[0].legend()
+
+    for i, data in enumerate(tx_length_trials):
+        axs[1].plot(MAX_TX_LENGTH, data, label=FUNCTIONS[i][0])
+    axs[1].set_xlabel("Number of items per transaction")
+
+    for i, data in enumerate(min_sup_trials):
+        axs[2].plot(MIN_SUPS, data, label=FUNCTIONS[i][0])
+    axs[2].set_xlabel("Minimum support (%)")
+
+    axs[0].set_title(
+        "Comparing selected pattern mining algorithms on Adult Census dataset"
+    )
+
+    plt.tight_layout()
     plt.show()
-
-    print(a)
-    print(b)
 
 
 if __name__ == "__main__":
