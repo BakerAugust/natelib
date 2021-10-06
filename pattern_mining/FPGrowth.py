@@ -1,8 +1,27 @@
 from typing import List, Optional, Union, Dict
 from itertools import chain, combinations
 from collections import OrderedDict
+import pandas as pd
 
-from pattern_mining.apriori import find_frequent
+
+def find_frequent(candidates: List[tuple], transactions, min_sup: int) -> dict:
+    """
+    Counts transactions that contain all items in candidate for
+    every candidate.
+
+    Returns a tuple of (dict of {frequent tuples: counts}, frequent_transactions,)
+    """
+    counts = {}
+
+    for t in transactions:
+        for i in t:
+            counts[(i,)] = counts.get((i,), 0) + 1
+    # Filter to only frequent
+    output = {}
+    for k, v in counts.items():
+        if v >= min_sup:
+            output[k] = v
+    return output, transactions
 
 
 def txsort(transaction: tuple, items: List[str]) -> tuple:
@@ -45,10 +64,8 @@ class FPNode:
 
         if parent:
             self.parent = parent
-            self.level = parent.level + 1
         else:
             self.parent: FPNode = None
-            self.level: int = 0
 
     def increment(self):
         """
@@ -72,7 +89,6 @@ class FPNode:
 
     def __repr__(self) -> str:
         s = f"<Class FPNode ({self.item}, {self.count}) "
-        s = s + f"level {self.level} "
         if self.parent:
             s = s + f"parent ({self.parent.item}, {self.parent.count}) "
         s = s + f"children = [{[(c.item, c.count) for c in self.children]}] "
@@ -107,11 +123,6 @@ class FPTree:
         if current_header is None:
             self.header_table[item] = child
 
-        # Insert and displace previous header
-        elif child.level < current_header.level:
-            self.header_table[item] = child
-            child.node_link = current_header
-
         # Append to end of node_link list
         else:
             while current_header.node_link is not None:
@@ -126,17 +137,18 @@ class FPTree:
         """
         # filter infrequent items
         filtered_tx = [i for i in transaction if (i,) in self.items]
-        t = txsort(filtered_tx, self.items)
-        parent = self.root
-        for i in t:
-            child = parent.has_child(tuple(i))
-            if child:
-                child.increment()
-            else:
-                child = self._add_node((i,), parent)
-            # Step down in the tree
-            parent = child
-        return
+        if len(filtered_tx) > 0:
+            t = txsort(filtered_tx, self.items)
+            parent = self.root
+            for i in t:
+                child = parent.has_child((i,))
+                if child:
+                    child.increment()
+                else:
+                    child = self._add_node((i,), parent)
+                # Step down in the tree
+                parent = child
+            return
 
     def fit(self, transactions: List[tuple], min_sup: Union[int, float]):
         """
@@ -146,14 +158,20 @@ class FPTree:
             self.min_sup = min_sup
         elif min_sup > 0:
             self.min_sup = min_sup * len(transactions)
-
+        else:
+            raise ValueError(f"min_sup must be > 0. {min_sup} provided")
         # First pass through our data to get len-1 frequent items.
         itemset = set()
         [itemset.update(set(t)) for t in transactions]
-        self.items = list(tuple(i) for i in itemset)  # convert back to tuples
+        items = []
+        for i in itemset:
+            if isinstance(i, tuple):
+                items.append(i)
+            else:
+                items.append((i,))
 
         frequent_unsorted, transactions = find_frequent(
-            self.items, transactions, min_sup
+            items, transactions, self.min_sup
         )
 
         # Sort by counts and set items to sorted
