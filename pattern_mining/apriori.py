@@ -10,7 +10,7 @@ def find_frequent(
     every candidate.
 
     Includes an *improvement* to traditional Apriori. Transactions
-    that contain no frequent itemsets are discarded for future
+    that contain no frequent itemsets are discarded from future
     consideration. This is acceptable because any transaction
     with no k length frequent itemsets cannot have any k+1 length
     frequent itemsets.
@@ -26,6 +26,8 @@ def find_frequent(
         for candidate in candidates:
             if all([c in t for c in candidate]):
                 counts[candidate] = counts.get(candidate, 0) + 1
+
+                # Course first pass for pruning
                 if prune_infrequent and not added:
                     frequent_transactions.append(t)
                     added = True
@@ -34,8 +36,18 @@ def find_frequent(
     for k, v in counts.items():
         if v >= min_sup:
             output[k] = v
+
+    # Full removal of transactions without frequent itemsets
     if prune_infrequent:
-        return output, list(frequent_transactions)
+        txs = []
+        for t in frequent_transactions:
+            # Removes items of length k automatically...
+            if len(t) > len(candidates[0]):
+                for itemset in output.keys():
+                    if all([i in t for i in sorted(itemset)]):
+                        txs.append(t)
+                        break  # exit the loop
+        return output, txs
 
     else:
         return output, transactions
@@ -99,8 +111,8 @@ def apriori(
             items.append(i)
         else:
             items.append((i,))
-    L0, transactions = find_frequent(
-        items, transactions, min_sup, prune_infrequent=prune_infrequent
+    L0, transactions = find_frequent(  # Don't prune on the first pass
+        items, transactions, min_sup, prune_infrequent=False
     )
     L.append(L0)
     max_tx_length = max([len(t) for t in transactions])

@@ -1,4 +1,4 @@
-from typing import List, Optional, Union, Dict
+from typing import Iterable, List, Optional, Union, Dict
 from itertools import chain, combinations
 from collections import OrderedDict
 import pandas as pd
@@ -31,14 +31,17 @@ def txsort(transaction: tuple, items: List[str]) -> tuple:
     return tuple(sorted(transaction, key=lambda x: items.index((x,))))
 
 
-def powerset(itemset: tuple):
+def powerset(itemset: tuple, max_size: int = None, min_size: int = 1) -> Iterable:
     """
     Returns all combinations of items in itemset of length 1 or more.
 
-    Credit: https://docs.python.org/3/library/itertools.html#itertools-recipes
+    Courtesy of https://docs.python.org/3/library/itertools.html#itertools-recipes
     """
+    if not max_size:
+        max_size = len(itemset)
+
     return chain.from_iterable(
-        combinations(itemset, r) for r in range(1, len(itemset) + 1)
+        combinations(itemset, r) for r in range(min_size, max_size + 1)
     )
 
 
@@ -98,10 +101,8 @@ class FPNode:
 
 class FPTree:
     """
-    Frequent-pattern trees are constructed based on a
-    frequent 1-item sets and
-
-    http://hanj.cs.illinois.edu/pdf/dami04_fptree.pdf
+    Implementation of the FPGrowth algorithm for frequent pattern
+    mining as first described by [Han, Pei, Yin and Mao (2004)](http://hanj.cs.illinois.edu/pdf/dami04_fptree.pdf).
     """
 
     def __init__(self):
@@ -133,7 +134,7 @@ class FPTree:
 
     def add_transaction(self, transaction: tuple):
         """
-        Adds transaction to the FPTree
+        Adds transaction to the tree
         """
         # filter infrequent items
         filtered_tx = [i for i in transaction if (i,) in self.items]
@@ -152,7 +153,7 @@ class FPTree:
 
     def fit(self, transactions: List[tuple], min_sup: Union[int, float]):
         """
-        Build up the FPTree
+        Build up the tree
         """
         if min_sup >= 1:
             self.min_sup = min_sup
@@ -196,8 +197,7 @@ class FPTree:
             node = node.parent
         all_combos = powerset(path_items)
         for itemset in all_combos:
-            if count >= self.min_sup:
-                frequent_items[itemset] = count
+            frequent_items[itemset] = count
         return frequent_items
 
     def mine(self) -> dict:
@@ -209,9 +209,13 @@ class FPTree:
             current_node = self.header_table[i]
             # single path
             if not current_node.node_link:
-                frequent_patterns = combine_dicts(
-                    [self._mine_single_path(current_node), frequent_patterns]
-                )
+                # For any children right below root
+                if current_node.parent.item == "null":
+                    frequent_patterns[current_node.item] = current_node.count
+                else:
+                    frequent_patterns = combine_dicts(
+                        [self._mine_single_path(current_node), frequent_patterns]
+                    )
 
             # multipath
             else:
@@ -242,6 +246,3 @@ class FPTree:
                 for k, v in prefix_itemsets.items():
                     frequent_patterns[prefix + k] = v
         return frequent_patterns
-
-    def __repr__(self) -> str:
-        pass
