@@ -1,4 +1,7 @@
-import random
+"""
+Test cases for use with pytest and runtime comparison.
+"""
+
 import matplotlib.pyplot as plt
 import time
 from typing import Tuple, List
@@ -229,10 +232,10 @@ def compare_performance():
     SAMPLE_SIZES = [0.10, 0.25, 0.5, 0.75, 1]
 
     # Limit the max number of items allowed per transation
-    MAX_TX_LENGTH = [3, 6, 9]
+    MAX_TX_LENGTH = [1, 3, 5, 7, 9]
 
     # Differing levels of support
-    MIN_SUPS = [0.5, 0.25, 0.10, 0.5, 0.25, 0.01]
+    MIN_SUPS = [0.5, 0.25, 0.10, 0.05, 0.025, 0.01]
 
     FUNCTIONS = [
         ("apriori_basic", apriori_basic),
@@ -251,8 +254,10 @@ def compare_performance():
 
     # Time as a function of N transactions
     size_trials = [[], [], []]
+    sample_sizes_n = []
     for s in SAMPLE_SIZES:
         tx_subset = transactions[: round(len(transactions) * s), :]
+        sample_sizes_n.append(len(tx_subset))
         for i, fn in enumerate(FUNCTIONS):
             size_trials[i].append(timetrial(fn[1], tx_subset, min_sup=0.05))
 
@@ -271,26 +276,28 @@ def compare_performance():
             min_sup_trials[i].append(timetrial(fn[1], tx_subset, min_sup=min_sup))
 
     # Plot everything
-    fig, axs = plt.subplots(3, 1)
+    fig, axs = plt.subplots(3, 1, figsize=(12, 8))
     for i, data in enumerate(size_trials):
-        axs[0].plot(SAMPLE_SIZES, data, label=FUNCTIONS[i][0])
+        axs[0].plot(sample_sizes_n, data, label=FUNCTIONS[i][0])
     axs[0].set_xlabel("Number of transactions")
     axs[0].legend()
+    axs[0].set_ylabel("Time (s)")
 
     for i, data in enumerate(tx_length_trials):
         axs[1].plot(MAX_TX_LENGTH, data, label=FUNCTIONS[i][0])
     axs[1].set_xlabel("Number of items per transaction")
+    axs[1].set_ylabel("Time (s)")
 
     for i, data in enumerate(min_sup_trials):
         axs[2].plot(MIN_SUPS, data, label=FUNCTIONS[i][0])
     axs[2].set_xlabel("Minimum support (%)")
+    axs[2].set_ylabel("Time (s)")
 
     axs[0].set_title(
         "Comparing selected pattern mining algorithms on Adult Census dataset"
     )
-
     plt.tight_layout()
-    plt.show()
+    plt.savefig("pattern_mining/algorithm_performance.png")
 
 
 if __name__ == "__main__":
