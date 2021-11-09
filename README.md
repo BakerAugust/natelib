@@ -1,2 +1,2 @@
 # natelib
-Lake of useful python code
+Some useful things, some pedagogical things ¯\_(ツ)_/¯
