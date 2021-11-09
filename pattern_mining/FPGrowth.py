@@ -1,0 +1,248 @@
+from typing import Iterable, List, Optional, Union, Dict
+from itertools import chain, combinations
+from collections import OrderedDict
+import pandas as pd
+
+
+def find_frequent(candidates: List[tuple], transactions, min_sup: int) -> dict:
+    """
+    Counts transactions that contain all items in candidate for
+    every candidate.
+
+    Returns a tuple of (dict of {frequent tuples: counts}, frequent_transactions,)
+    """
+    counts = {}
+
+    for t in transactions:
+        for i in t:
+            counts[(i,)] = counts.get((i,), 0) + 1
+    # Filter to only frequent
+    output = {}
+    for k, v in counts.items():
+        if v >= min_sup:
+            output[k] = v
+    return output, transactions
+
+
+def txsort(transaction: tuple, items: List[str]) -> tuple:
+    """
+    Sorts item in transaction based on their appearance in items.
+    """
+    return tuple(sorted(transaction, key=lambda x: items.index((x,))))
+
+
+def powerset(itemset: tuple, max_size: int = None, min_size: int = 1) -> Iterable:
+    """
+    Returns all combinations of items in itemset of length 1 or more.
+
+    Courtesy of https://docs.python.org/3/library/itertools.html#itertools-recipes
+    """
+    if not max_size:
+        max_size = len(itemset)
+
+    return chain.from_iterable(
+        combinations(itemset, r) for r in range(min_size, max_size + 1)
+    )
+
+
+def combine_dicts(dicts: List[dict]) -> dict:
+    new_dict: dict = {}
+    for d in dicts:
+        for k, v in d.items():
+            # Accumulate counts
+            new_dict[k] = max(v, new_dict.get(k, 0))
+    return new_dict
+
+
+class FPNode:
+    """
+    Simple node class
+    """
+
+    def __init__(self, item: tuple, parent: Optional["FPNode"] = None):
+        self.item: tuple = item
+        self.count: int = 1
+        self.children: List[FPNode] = []
+        self.node_link: FPNode = None
+
+        if parent:
+            self.parent = parent
+        else:
+            self.parent: FPNode = None
+
+    def increment(self):
+        """
+        Add one to count
+        """
+        self.count += 1
+
+    def has_child(self, item: tuple) -> Union[bool, "FPNode"]:
+        """
+        Checks if there is an immediate child node for item.
+        """
+        for child in self.children:
+            if child.item == item:
+                return child
+        return False
+
+    def add_child(self, item) -> "FPNode":
+        child = FPNode(item, parent=self)
+        self.children.append(child)
+        return child
+
+    def __repr__(self) -> str:
+        s = f"<Class FPNode ({self.item}, {self.count}) "
+        if self.parent:
+            s = s + f"parent ({self.parent.item}, {self.parent.count}) "
+        s = s + f"children = [{[(c.item, c.count) for c in self.children]}] "
+        s = s + f"has node_link: {self.node_link != None}>"
+        return s
+
+
+class FPTree:
+    """
+    Implementation of the FPGrowth algorithm for frequent pattern
+    mining as first described by [Han, Pei, Yin and Mao (2004)](http://hanj.cs.illinois.edu/pdf/dami04_fptree.pdf).
+    """
+
+    def __init__(self):
+        self.root: FPNode = FPNode("null")
+        self.frequent_items: OrderedDict = {}
+
+        # shortcut to finding the top node for each item
+        self.header_table: Dict[tuple, FPNode] = {}
+
+    def _add_node(self, item: tuple, parent: FPNode) -> FPNode:
+        """
+        Adds new node, updates node_links appropriately and returns
+        """
+        child = parent.add_child(item)
+        # Check header table
+        current_header = self.header_table.get(item, None)
+
+        # Set header if none
+        if current_header is None:
+            self.header_table[item] = child
+
+        # Append to end of node_link list
+        else:
+            while current_header.node_link is not None:
+                current_header = current_header.node_link
+            current_header.node_link = child
+
+        return child
+
+    def add_transaction(self, transaction: tuple):
+        """
+        Adds transaction to the tree
+        """
+        # filter infrequent items
+        filtered_tx = [i for i in transaction if (i,) in self.items]
+        if len(filtered_tx) > 0:
+            t = txsort(filtered_tx, self.items)
+            parent = self.root
+            for i in t:
+                child = parent.has_child((i,))
+                if child:
+                    child.increment()
+                else:
+                    child = self._add_node((i,), parent)
+                # Step down in the tree
+                parent = child
+            return
+
+    def fit(self, transactions: List[tuple], min_sup: Union[int, float]):
+        """
+        Build up the tree
+        """
+        if min_sup >= 1:
+            self.min_sup = min_sup
+        elif min_sup > 0:
+            self.min_sup = min_sup * len(transactions)
+        else:
+            raise ValueError(f"min_sup must be > 0. {min_sup} provided")
+        # First pass through our data to get len-1 frequent items.
+        itemset = set()
+        [itemset.update(set(t)) for t in transactions]
+        items = []
+        for i in itemset:
+            if isinstance(i, tuple):
+                items.append(i)
+            else:
+                items.append((i,))
+
+        frequent_unsorted, transactions = find_frequent(
+            items, transactions, self.min_sup
+        )
+
+        # Sort by counts and set items to sorted
+        self.frequent_items = OrderedDict(
+            sorted(frequent_unsorted.items(), key=lambda x: x[1], reverse=True)
+        )
+        self.items = list(self.frequent_items.keys())
+
+        for transaction in transactions:
+            self.add_transaction(transaction)
+
+    def _mine_single_path(self, node: FPNode) -> dict:
+        """
+        Finds all items above node in path and returns a
+        dictionary of frequent patterns.
+        """
+        frequent_items = {}
+        path_items: tuple = ()
+        count = node.count
+        while node.item != "null":
+            path_items = path_items + node.item
+            node = node.parent
+        all_combos = powerset(path_items)
+        for itemset in all_combos:
+            frequent_items[itemset] = count
+        return frequent_items
+
+    def mine(self) -> dict:
+        """
+        Mine the tree for all frequent patterns with recursion.
+        """
+        frequent_patterns = {}
+        for i in reversed(self.items):
+            current_node = self.header_table[i]
+            # single path
+            if not current_node.node_link:
+                # For any children right below root
+                if current_node.parent.item == "null":
+                    frequent_patterns[current_node.item] = current_node.count
+                else:
+                    frequent_patterns = combine_dicts(
+                        [self._mine_single_path(current_node), frequent_patterns]
+                    )
+
+            # multipath
+            else:
+                # Could replace this with dict for performance. Would need to change .fit().
+                pattern_base = []
+                prefix = current_node.item
+                prefix_count = 0  # Count instances of prefix
+
+                # Traverse all node links
+                while current_node is not None:
+                    count = current_node.count
+                    path = ()
+                    node = current_node.parent
+                    # Go up each path
+                    while node.item != "null":
+                        path = path + node.item
+                        node = node.parent
+                    pattern_base += count * [path]
+                    prefix_count += count
+                    current_node = current_node.node_link
+
+                # Add in the prefix
+                frequent_patterns[prefix] = prefix_count
+                # Recursively mine the suffixes
+                conditional_tree = FPTree()
+                conditional_tree.fit(pattern_base, min_sup=self.min_sup)
+                prefix_itemsets = conditional_tree.mine()
+                for k, v in prefix_itemsets.items():
+                    frequent_patterns[prefix + k] = v
+        return frequent_patterns
