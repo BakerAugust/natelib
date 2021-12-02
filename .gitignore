@@ -1,4 +1,6 @@
 *.pyc
 *.DS_Store
 *.python_version
+*.vscode
 *__pycache__
+*.ipynb_checkpoints
