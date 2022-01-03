@@ -1,5 +1,8 @@
 import torch
+from torch.nn.functional import mse_loss
 from typing import Tuple
+
+from torch.optim.optimizer import Optimizer
 
 
 class Perceptron:
@@ -88,3 +91,49 @@ class Adaline(Perceptron):
                 if verbose:
                     mse = torch.mean(torch.square(y - self.forward(x)))
                     print(f"epoch:{e}, batch:{i}. Loss={mse}")
+
+
+class AdalineNN(torch.nn.Module):
+    """
+    Adaline classifier using Pytorch automagic
+    """
+
+    def __init__(self, n_features: int):
+        super(AdalineNN, self).__init__()
+        self.linear = torch.nn.Linear(n_features, 1)
+
+        self.linear.weight.detach().zero_()
+        self.linear.bias.detach().zero_()
+
+    def forward(self, x) -> None:
+        net_inputs = self.linear(x)
+        print(net_inputs.size())
+        return net_inputs.view(-1)
+
+    def train(
+        self,
+        x: torch.Tensor,
+        y: torch.Tensor,
+        learning_rate: float,
+        epochs: int,
+        batch_size: int,
+        verbose=False,
+    ) -> None:
+
+        optimizer = torch.optim.SGD(self.parameters(), lr=learning_rate)
+        for e in range(epochs):
+            batches = torch.split(torch.arange(y.size(0)), batch_size)
+            for i, batch_idxs in enumerate(batches):
+                batch_x = x[batch_idxs]
+                batch_y = y[batch_idxs]
+                yhat = self.forward(batch_x)
+
+                loss = mse_loss(yhat, batch_y)  # calc loss
+                optimizer.zero_grad()  # reset grads
+                loss.backward()  # calc grads
+                optimizer.step()  # update weights
+
+                if verbose:
+                    with torch.no_grad():
+                        mse = mse_loss(y, self.forward(x))
+                        print(f"epoch:{e}, batch:{i}. Loss={mse}")

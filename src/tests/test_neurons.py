@@ -1,8 +1,7 @@
-from numpy import dot
-from deep_learning.neurons import Perceptron, Adaline
+from torch.nn.functional import mse_loss
+from deep_learning.neurons import Perceptron, Adaline, AdalineNN
 from sklearn.datasets import make_blobs, load_breast_cancer
-from sklearn.metrics import roc_auc_score, roc_curve
-import matplotlib.pyplot as plt
+from sklearn.metrics import roc_auc_score
 import torch
 
 
@@ -44,11 +43,11 @@ def test_adaline_simple():
     # Predict
     predictions = adaline.forward(x)
 
-    # Should be perfect fit if linearly seperable
-    assert torch.allclose(torch.where(predictions > 0.5, 1, 0).float(), y)
+    # Asser mse loss below some reasonable threshold
+    assert mse_loss(predictions, y) < 0.15
 
 
-def test_adaline_complex():
+def adaline_complex(Model):
     """
     Tests adaline on breast cancer dataset
     """
@@ -65,11 +64,25 @@ def test_adaline_complex():
     x = (x - x_means[None, :]) / x_stds[None, :]
 
     # Train adaline
-    adaline = Adaline(n_features)
-    adaline.train(x, y, learning_rate=0.01, epochs=20, batch_size=50, verbose=False)
+    adaline = Model(n_features)
+    adaline.train(x, y, learning_rate=0.1, epochs=10, batch_size=50, verbose=False)
 
     # Predict
-    predictions = adaline.forward(x)
+    with torch.no_grad():
+        predictions = adaline.forward(x)
+        # Assert some reasonable level of performance
+        assert roc_auc_score(y, predictions.detach().numpy()) > 0.95
 
-    # Assert some reasonable level of performance
-    assert roc_auc_score(y, predictions) > 0.95
+
+def test_adaline_manual():
+    """
+    Tests manual adaline implementation
+    """
+    adaline_complex(Adaline)
+
+
+def test_adaline_autograd():
+    """
+    Tests adaline implementation using pytorch magic
+    """
+    adaline_complex(AdalineNN)
