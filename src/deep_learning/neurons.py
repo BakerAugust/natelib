@@ -1,8 +1,11 @@
 import torch
-from torch.nn.functional import mse_loss
+from torch.nn.functional import cross_entropy, mse_loss, binary_cross_entropy
 from typing import Tuple
+from torch.nn.modules.activation import ReLU
+from torch.nn.modules.linear import Linear
 
 from torch.optim.optimizer import Optimizer
+from torch.utils.data.dataloader import DataLoader
 
 
 class Perceptron:
@@ -107,7 +110,6 @@ class AdalineNN(torch.nn.Module):
 
     def forward(self, x) -> None:
         net_inputs = self.linear(x)
-        print(net_inputs.size())
         return net_inputs.view(-1)
 
     def train(
@@ -137,3 +139,126 @@ class AdalineNN(torch.nn.Module):
                     with torch.no_grad():
                         mse = mse_loss(y, self.forward(x))
                         print(f"epoch:{e}, batch:{i}. Loss={mse}")
+
+
+class LogisticRegression(torch.nn.Module):
+    """
+    Binary logistic regression
+    """
+
+    def __init__(self, n_features: int):
+        super(LogisticRegression, self).__init__()
+        self.linear = torch.nn.Linear(n_features, 1)
+
+        self.linear.weight.detach().zero_()
+        self.linear.bias.detach().zero_()
+
+    def forward(self, x) -> None:
+        net_inputs = self.linear(x)
+        return torch.sigmoid(net_inputs).view(-1)
+
+    def predict(self, x) -> None:
+        """
+        Output class label
+        """
+        probas = self.forward(x)
+        return torch.where(probas > 0.5, 1, 0)
+
+    def train(
+        self,
+        x: torch.Tensor,
+        y: torch.Tensor,
+        learning_rate: float,
+        epochs: int,
+        batch_size: int,
+        verbose=False,
+    ) -> None:
+
+        optimizer = torch.optim.SGD(self.parameters(), lr=learning_rate)
+        for e in range(epochs):
+            batches = torch.split(torch.arange(y.size(0)), batch_size)
+            for i, batch_idxs in enumerate(batches):
+                batch_x = x[batch_idxs]
+                batch_y = y[batch_idxs]
+                yhat = self.forward(batch_x)
+
+                loss = binary_cross_entropy(yhat, batch_y)  # calc loss
+                optimizer.zero_grad()  # reset grads
+                loss.backward()  # calc grads
+                optimizer.step()  # update weights
+
+                if verbose:
+                    with torch.no_grad():
+                        xent = binary_cross_entropy(y, self.forward(x))
+                        print(f"epoch:{e:.0f}, batch:{i:.0f}. Loss={xent:.3f}")
+
+
+class MultiLayerPerceptron(torch.nn.Module):
+    """
+    Multi-layer perceptron for classification
+    """
+
+    def __init__(self, n_features: int, n_classes: int, n_hidden: int):
+        super(MultiLayerPerceptron, self).__init__()
+
+        self.n_classes = n_classes
+        self.classifer = torch.nn.Sequential(
+            torch.nn.Flatten(),
+            torch.nn.Linear(n_features, n_hidden),
+            torch.nn.ReLU(),
+            torch.nn.Linear(n_hidden, n_classes),
+        )
+
+    def forward(self, x):
+        """
+        Return logits
+        """
+        return self.classifer(x)
+
+    def fit(
+        self,
+        dataloader: DataLoader,
+        learning_rate: float,
+        epochs: int,
+        optimizer: torch.optim.Optimizer,
+        verbose=False,
+    ) -> None:
+
+        self.train()
+        optim = optimizer(self.parameters(), lr=learning_rate)
+
+        for e in range(epochs):
+            correct, n_examples = 0, 0
+
+            for batch_idx, (x, y) in enumerate(dataloader):
+                logits = self(x)
+                loss = cross_entropy(logits, y)
+                optim.zero_grad()
+
+                loss.backward()
+                optim.step()
+
+                if verbose:
+                    with torch.no_grad():
+                        print(
+                            f"epoch:{e:.0f}, batch:{batch_idx:.0f}. Loss={loss.item():.3f}"
+                        )
+                        _, yhat = torch.max(logits, dim=1)
+                        correct += torch.sum(yhat == y)
+                        n_examples += yhat.size(0)
+
+            # Print train accuracy on each epoch
+            if verbose:
+                train_accuracy = correct / n_examples
+                with torch.no_grad():
+                    print(
+                        f"epoch:{e:.0f} over, training_accuracy={train_accuracy.item():.3f}"
+                    )
+
+    def predict(self, x):
+        """ """
+        self.eval()
+        logits = self(x)
+        _, labels = torch.max(logits, dim=1)
+        probas = torch.softmax(logits, dim=1)
+        return labels, probas

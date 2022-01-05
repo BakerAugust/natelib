@@ -1,5 +1,5 @@
 from torch.nn.functional import mse_loss
-from deep_learning.neurons import Perceptron, Adaline, AdalineNN
+from deep_learning.neurons import LogisticRegression, Perceptron, Adaline, AdalineNN
 from sklearn.datasets import make_blobs, load_breast_cancer
 from sklearn.metrics import roc_auc_score
 import torch
@@ -86,3 +86,8 @@ def test_adaline_autograd():
     Tests adaline implementation using pytorch magic
     """
     adaline_complex(AdalineNN)
+
+
+def test_logistic_regression():
+    """ """
+    adaline_complex(LogisticRegression)
