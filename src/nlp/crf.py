@@ -10,6 +10,7 @@ from torch import nn
 from torch.functional import Tensor
 
 START_LABEL = "START"
+EMPTY_LABEL = "EMPTY"
 
 
 @dataclass
@@ -67,16 +68,18 @@ class CRF(nn.Module):
     ```
     """
 
-    def __init__(self) -> None:
+    def __init__(self, max_sequence_length=30, add_start: bool = True) -> None:
         super(CRF, self).__init__()
         self.labels: list = None
         self.tokens: list = None
         self.batches: List[List[Sequence]] = []
 
         self.batch_size = 100
-        self.max_sequence_length = 30
+        self.max_sequence_length = max_sequence_length
         self.learning_rate: float = 0.01
         self.max_epochs: int = 5
+
+        self.add_start = add_start
 
     def _make_transition_tensor(self, t_feat_tuples: List[tuple]) -> Tensor:
         """
@@ -86,8 +89,6 @@ class CRF(nn.Module):
             raise AttributeError("Labels are not yet set!")
 
         t_feats = torch.zeros(size=(len(self.labels), len(self.labels)))
-        if START_LABEL not in self.labels:
-            t_feats[0, :] = 0  # Transition from 'START' to any other POS
 
         for t in t_feat_tuples:
             t_feats[self.labels.index(t[0]), self.labels.index(t[1])] = t[2]
@@ -99,12 +100,15 @@ class CRF(nn.Module):
 
         Returns the tensor matrix and a dict for index the tensor by token.
         """
-        e_feats = torch.zeros(size=(len(self.labels), len(e_feat_dict.keys())))
+        e_feats = torch.zeros(size=(len(self.labels), len(self.tokens)))
         token_idx = 0
         for token in self.tokens:
-            vals = e_feat_dict[token]
-            for pos, weight in zip(vals["pos"], vals["weight"]):
-                e_feats[self.labels.index(pos), token_idx] = weight
+            if token == EMPTY_LABEL:
+                pass
+            else:
+                vals = e_feat_dict[token]  # Use get to handle unknown words gracefully
+                for pos, weight in zip(vals["pos"], vals["weight"]):
+                    e_feats[self.labels.index(pos), token_idx] = weight
             token_idx += 1
 
         return e_feats
@@ -122,7 +126,7 @@ class CRF(nn.Module):
             split = feat_str.strip("\n").split(" ")
             assert len(split) == 2
             weight = float(split[1])
-            if abs(weight) < 0.00001 or "START" in split[0]:
+            if abs(weight) < 0.00001:  # or "START" in split[0]:
                 pass
             else:
                 feat = split[0]
@@ -154,9 +158,25 @@ class CRF(nn.Module):
             self.labels = list(labels)
             if START_LABEL not in self.labels:
                 self.labels.insert(0, START_LABEL)
+
         if not self.tokens:
             self.tokens = list(e_feat_dict.keys())
+            if START_LABEL not in self.tokens:
+                self.tokens.insert(0, START_LABEL)
+
+        # Add empty token to manage encoding/decoding of batches
+        if EMPTY_LABEL not in self.tokens:
+            self.tokens.insert(0, EMPTY_LABEL)
+        if EMPTY_LABEL not in self.labels:
+            self.labels.insert(0, EMPTY_LABEL)
+
         self.t_feats = self._make_transition_tensor(t_feat_tuples)
+
+        # Add emission for start
+        e_feat_dict[START_LABEL] = {
+            "pos": [START_LABEL],
+            "weight": [1],
+        }
         self.e_feats = self._make_emission_tensor(e_feat_dict)
 
     def load_weights(self, path: str) -> None:
@@ -170,15 +190,16 @@ class CRF(nn.Module):
 
     def decode(self, X: Tensor) -> Tensor:
         """
-        Viterbi algorithm for decoded a one-hot representation
+        Viterbi algorithm for decoding a one-hot representation
         of a sequence of tokens.
         """
+        batch_size, sentence_length, vocab_length = X.size()
 
         delta = torch.full(
-            size=(X.size()[0], X.size()[1] + 1, len(self.labels)), fill_value=np.NINF
+            size=(batch_size, sentence_length + 1, len(self.labels)), fill_value=np.NINF
         )
         backpointers = torch.full(
-            size=(X.size()[0], X.size()[1] + 1, len(self.labels)), fill_value=np.NINF
+            size=(batch_size, sentence_length + 1, len(self.labels)), fill_value=np.NINF
         )
         delta[:, 0, 0] = 0
         backpointers[:, 0, 0] = 0
@@ -201,16 +222,19 @@ class CRF(nn.Module):
             size=(X.shape[0], X.shape[1] + 1, len(self.labels)),
             fill_value=0.0,
         )
+        # TODO we are pointing to the wrong label for "START" tokens here...
         for i in range(X.shape[0]):
             n_maxs, n_idxs = delta[i, :, :].max(1)
             _, n_idx = n_maxs.max(0)
             t_idx = int(n_idxs[n_idx])
+
             # walk back
-            while n_idx >= 0:
-                Y_hat[i, n_idx, :] = 0
+            while n_idx >= 1 + int(self.add_start):  # Offset with bool
                 Y_hat[i, n_idx, t_idx] = 1
                 t_idx = int(backpointers[i, n_idx, t_idx].item())
                 n_idx -= 1
+        if self.add_start:
+            Y_hat[:, 1, self.labels.index(START_LABEL)] = 1
         return Y_hat[:, 1:, :]
 
     def seq2batch(
@@ -224,7 +248,9 @@ class CRF(nn.Module):
         Sequences of length < max_sequence_length are padded with zeros.
         """
         if not max_sequence_length:
-            max_sequence_length = max([len(seq.labels) for seq in data])
+            max_sequence_length = max([len(seq.labels) for seq in data]) + int(
+                self.add_start
+            )
 
         Y = torch.full(
             size=(len(data), max_sequence_length, len(self.labels)),
@@ -234,23 +260,34 @@ class CRF(nn.Module):
             size=(len(data), max_sequence_length, len(self.tokens)),
             fill_value=0,
         )
+        if self.add_start:
+            Y[:, 0, self.labels.index(START_LABEL)] = 1
+            X[:, 0, self.tokens.index(START_LABEL)] = 1
+
         for i, seq in enumerate(data):
-            j = 0
-            while (j < max_sequence_length) and (j < len(seq.labels)):
+            seq_idx = 0
+            if self.add_start:
+                j = 1
+            else:
+                j = 0
+            while (j < max_sequence_length) and (
+                j < len(seq.labels) + int(self.add_start)
+            ):
                 # for j, l in enumerate(seq.labels):
-                Y[i, j, :] = 0
+                # Y[i, j, :] = 0
                 try:
-                    Y[i, j, self.labels.index(seq.labels[j])] = 1
+                    Y[i, j, self.labels.index(seq.labels[seq_idx])] = 1
                 except ValueError:
-                    print(f"Tag {seq.labels[j]} not in training data!")
+                    print(f"Tag {seq.labels[seq_idx]} not in training data!")
                     pass
                 X[i, j, :] = 0
                 try:
-                    X[i, j, self.tokens.index(seq.tokens[j])] = 1
+                    X[i, j, self.tokens.index(seq.tokens[seq_idx])] = 1
                 except ValueError:
-                    print(f"Token {seq.tokens[j]} not in training data!")
+                    print(f"Token {seq.tokens[seq_idx]} not in training data!")
                     pass
                 j += 1
+                seq_idx += 1
         return Batch(Y, X)
 
     def batch2seq(self, batch: Batch) -> List[Sequence]:
@@ -270,14 +307,21 @@ class CRF(nn.Module):
             for t_idx, l_idx, t_max in zip(
                 token_idxs[i, :], label_idxs[i, :], token_max[i, :]
             ):
-                if self.labels[l_idx] != START_LABEL:
+                # Exit decoding loop once we hit an empty label
+                if self.labels[l_idx] == EMPTY_LABEL:
+                    break
+
+                # Don't decode the start label
+                elif self.labels[l_idx] == START_LABEL:
+                    pass
+
+                # Otherwise, do decode
+                else:
                     if t_max == 1:
                         tokens.append(self.tokens[t_idx])
                     else:
                         tokens.append("UNKNOWN")
                     labels.append(self.labels[l_idx])
-                else:  # Exit loop once we start seeing START_LABEL
-                    break
             sequences.append(Sequence(tokens, labels))
 
         return sequences
@@ -296,6 +340,8 @@ class CRF(nn.Module):
         if data_copy:
             self.batches.append(data_copy)
 
+    # TODO make this API cleaner... some redundancy in how how things are being initialized
+    # when training vs. just decoding
     def initialize(self, data: List[Sequence]):
         """
         Set things up
@@ -307,8 +353,18 @@ class CRF(nn.Module):
         print(f"Number of tokens: {len(self.tokens)}")
         self.labels = list(set([l for d in data for l in d.labels]))
         print(f"Number of tags: {len(self.labels)}")
+
+        # Add start
         if START_LABEL not in self.labels:
             self.labels.insert(0, START_LABEL)
+
+        if START_LABEL not in self.tokens:
+            self.tokens.insert(0, START_LABEL)
+
+        if EMPTY_LABEL not in self.labels:
+            self.labels.insert(0, EMPTY_LABEL)
+        if EMPTY_LABEL not in self.tokens:
+            self.tokens.insert(0, EMPTY_LABEL)
 
         # init t_feats (t x t)
         self.t_feats = nn.parameter.Parameter(
@@ -337,9 +393,10 @@ class CRF(nn.Module):
         """
         score = torch.zeros(1)
         for i in range(0, batch.X.size()[1]):
-            score = (
-                score
-                + torch.sum(
+            if i - 1 < 0:  # Check if there is something to transition from
+                trans = 0
+            else:
+                trans = torch.sum(
                     torch.transpose(
                         self.t_feats[None, :, :] * batch.Y[:, i - 1, :, None],
                         1,
@@ -347,23 +404,26 @@ class CRF(nn.Module):
                     )  # (s x t x t')
                     * batch.Y[:, i, :, None]  # s x t
                 )
-                + torch.sum(
-                    self.e_feats[None, :, :]
-                    * batch.X[:, i, None, :]
-                    * batch.Y[:, i, :, None]
-                )
+            emit = torch.sum(
+                self.e_feats[None, :, :]
+                * batch.X[:, i, None, :]
+                * batch.Y[:, i, :, None]
             )
+            score = score + trans + emit
+
         return score
 
     def _simple_forward(self, batch: Batch) -> float:
         """
         Simple version of forward algorithm which avoids the need for a full table.
         """
-        alpha = torch.zeros(size=(batch.Y.shape[0], batch.Y.shape[2]))
+        batch_size, _, labels = batch.Y.shape
+
+        alpha = torch.zeros(size=(batch_size, labels))
         alpha[:, 0] = 1  # start
 
         for i in range(batch.Y.shape[1]):
-            next_token = torch.zeros(size=(batch.Y.shape[0], batch.Y.shape[2]))
+            next_token = torch.zeros(size=(batch_size, labels))
             emis = (self.e_feats[None, :, :] * batch.X[:, i, None, :]).sum(2)[
                 :, :, None
             ]
@@ -376,67 +436,81 @@ class CRF(nn.Module):
             alpha = next_token
         return alpha
 
-    def _forward(self, batch: Batch) -> Tensor:
+    def _forward(self, batch: Batch, verbose: bool = False) -> Tensor:
         """
-        Builds alpha tensor with log values
+        Builds forward tensor with log values
         """
-        alpha_hat = torch.zeros(
-            size=(batch.Y.shape[0], batch.Y.shape[1] + 1, batch.Y.shape[2])
-        )
-        alpha_hat[:, 0, 0] = 1
+        batch_size, sentence_length, labels = batch.Y.shape
 
-        for i in range(0, self.max_sequence_length):
-            # Build up alpha working forward
-            alpha_hat[:, i + 1, :] = (
-                torch.exp(
-                    torch.transpose(  # s x t x t'
-                        self.t_feats[None, :, :],
-                        1,
-                        2,
-                    )
-                    + (self.e_feats[None, :, :] * batch.X[:, i, None, :]).sum(2)[
-                        :, :, None
-                    ]  # s x t x 1
+        alpha_hat = torch.zeros(size=(batch_size, sentence_length + 1, labels))
+        alpha_hat[:, 0, self.labels.index(START_LABEL)] = 1
+        if verbose:
+            print(self.labels)
+            print(self.e_feats)
+
+        for i in range(1, sentence_length):
+            _, idx = batch.X[:, i, :].max(-1)
+
+            if verbose:
+                print(self.tokens[idx])
+
+            previous_alpha = alpha_hat[:, i - 1, :].clone()
+            for t in range(labels):
+                trans = self.t_feats[:, t].expand(batch_size, labels)  # s x t'
+                emis = (
+                    (self.e_feats[None, t, :] * batch.X[:, i, None, :])
+                    .sum(2)
+                    .expand(batch_size, labels)
                 )
-                + torch.transpose(alpha_hat[:, i, :, None].clone(), 1, 2)
-            ).logsumexp(
-                2
-            )  # s x 1 x t' #[none, : i-1, : ]
+                score = (trans + emis + previous_alpha).logsumexp(1)
+
+                if verbose:
+                    print(f"trans: {trans}")
+                    print(f"emis: {emis}")
+                    print(f"score: {score}")
+
+                # Build up alpha working forward
+                alpha_hat[:, i, t] = score
 
         # mask back to sentence length
         alpha_hat[:, 1:, :] = alpha_hat[:, 1:, :] * batch.Y.sum(2)[:, :, None]
         return alpha_hat
 
-    def _learn_step(self, batch: Batch) -> float:
+    def _learn_step(self, batch: Batch, verbose: bool = False) -> float:
         """
         One step of learning, including parameter updates.
         """
-        # alpha_hat = self._forward(batch)
-        alpha_hat = self._simple_forward(batch)
+        alpha_hat = self._forward(batch)
 
-        # Get Z for every sentence
-        # Z, _ = alpha_hat.max(1)
-        # all_logscore = torch.log(torch.sum(Z))
-        all_logscore = torch.log(torch.sum(alpha_hat))
-        Y_hat = self.decode(batch.X)
-        correct = torch.sum(torch.eq(batch.Y, Y_hat) * batch.Y)
-        total = torch.sum(batch.Y)
+        # Get Z for every sentence by grabbing the max column
+        Z, _ = alpha_hat.max(1)
+        all_logscore = torch.sum(Z.logsumexp(1))
+
         gold_logscore = self._score_batch(batch)
         if gold_logscore > 0:
             gold_logscore = torch.log(gold_logscore)
-        loss = gold_logscore - all_logscore
+
+        # loss = gold_logscore - all_logscore
+        loss = all_logscore - gold_logscore
         loss.backward()
 
         with torch.no_grad():
             for param in self.parameters():
-                param.data += param.grad * self.learning_rate
+                param.data -= param.grad * self.learning_rate
 
-        print(f"correct {correct} total {total}")
-        print(f"Tag accuracy rate {correct/total}")
+        if verbose:
+            Y_hat = self.decode(batch.X)
+            correct = torch.sum(torch.eq(batch.Y, Y_hat) * batch.Y)
+            total = torch.sum(batch.Y)
+            print(f"correct {correct} total {total}")
+            print(f"Tag accuracy rate {correct/total}")
+
         print(f"gold_logscore {gold_logscore.item()} all_logscore {all_logscore}")
         print(f"Loss {loss.item()}")
 
-    def learn_weights(self, data: List[Sequence], epochs: int = None) -> float:
+    def learn_weights(
+        self, data: List[Sequence], epochs: int = None, verbose: bool = False
+    ) -> float:
         """
         Learns transition and emission weights from data using CRF.
         """
@@ -446,7 +520,7 @@ class CRF(nn.Module):
         for epoch in range(epochs):
             for i, seq in enumerate(self.batches):
                 print(f"========\niteration: {epoch} batch: {i}")
-                self._learn_step(self.seq2batch(seq, self.max_sequence_length))
+                self._learn_step(self.seq2batch(seq, self.max_sequence_length), verbose)
                 self.zero_grad()
 
     def save_weights(self, filepath: str) -> None:
@@ -536,4 +610,5 @@ if __name__ == "__main__":
         ]
         crf = CRF()
         crf.max_sequence_length = 10
-        crf.learn_weights(sequences, epochs=10)
+        crf.learn_weights(sequences, epochs=100, verbose=True)
+        crf.save_weights("toy_weights_new.txt")
