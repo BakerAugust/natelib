@@ -1,4 +1,11 @@
 *.pyc
 *.DS_Store
 *.python_version
+*.vscode
 *__pycache__
+*.ipynb_checkpoints
+.env
+
+# Ignore some big datasets
+src/data/MNIST
+src/deep_learning/examples/data

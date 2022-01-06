@@ -4,7 +4,7 @@ from numpy.core.numeric import allclose
 from sklearn.decomposition import PCA as skPCA
 from sklearn import datasets
 import matplotlib.pyplot as plt
-from pedagogy.pca import PCA
+from preprocess.pca import PCA
 
 np.set_printoptions(suppress=True)
 

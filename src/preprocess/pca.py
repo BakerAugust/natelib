@@ -68,7 +68,7 @@ class PCA:
         """
         return np.dot(self.data, self.components[:n_components].transpose())
 
-    def loading_plot(self, index: int) -> tuple[plt.Figure, plt.Axes]:
+    def loading_plot(self, index: int) -> Tuple[plt.Figure, plt.Axes]:
         """
         Creates a chart with the weights for the specified component.
         """
