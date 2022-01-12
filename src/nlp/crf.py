@@ -3,7 +3,7 @@ import numpy as np
 import torch
 import time
 import sys
-from typing import List, Literal, Tuple, Optional, get_args
+from typing import List, Tuple, Optional
 from dataclasses import dataclass
 from torch import nn
 
@@ -392,18 +392,15 @@ class CRF(nn.Module):
         Score annotated batch based on current weights.
         """
         score = torch.zeros(1)
-        for i in range(0, batch.X.size()[1]):
-            if i - 1 < 0:  # Check if there is something to transition from
-                trans = 0
-            else:
-                trans = torch.sum(
-                    torch.transpose(
-                        self.t_feats[None, :, :] * batch.Y[:, i - 1, :, None],
-                        1,
-                        2,
-                    )  # (s x t x t')
-                    * batch.Y[:, i, :, None]  # s x t
-                )
+        for i in range(1, batch.X.size()[1]):
+            trans = torch.sum(
+                torch.transpose(
+                    self.t_feats[None, :, :] * batch.Y[:, i - 1, :, None],
+                    1,
+                    2,
+                )  # (s x t x t')
+                * batch.Y[:, i, :, None]  # s x t
+            )
             emit = torch.sum(
                 self.e_feats[None, :, :]
                 * batch.X[:, i, None, :]
@@ -419,8 +416,10 @@ class CRF(nn.Module):
         """
         batch_size, _, labels = batch.Y.shape
 
-        alpha = torch.zeros(size=(batch_size, labels))
-        alpha[:, 0] = 1  # start
+        alpha = torch.zeros(size=(batch_size, labels), requires_grad=True)
+
+        with torch.no_grad():
+            alpha[:, 0] = 1  # start
 
         for i in range(batch.Y.shape[1]):
             next_token = torch.zeros(size=(batch_size, labels))
@@ -480,11 +479,8 @@ class CRF(nn.Module):
         """
         One step of learning, including parameter updates.
         """
-        alpha_hat = self._forward(batch)
-
-        # Get Z for every sentence by grabbing the max column
-        Z, _ = alpha_hat.max(1)
-        all_logscore = torch.sum(Z.logsumexp(1))
+        alpha_hat = self._simple_forward(batch)
+        all_logscore = torch.log(torch.sum((alpha_hat.logsumexp(1))))
 
         gold_logscore = self._score_batch(batch)
         if gold_logscore > 0:
@@ -519,7 +515,7 @@ class CRF(nn.Module):
             epochs = self.max_epochs
         for epoch in range(epochs):
             for i, seq in enumerate(self.batches):
-                print(f"========\niteration: {epoch} batch: {i}")
+                print(f"========\nepoch: {epoch} batch: {i}")
                 self._learn_step(self.seq2batch(seq, self.max_sequence_length), verbose)
                 self.zero_grad()
 
@@ -577,6 +573,8 @@ def load_sequences_from_file(file_path: str, n_sequences: int = None) -> List[Se
 
 if __name__ == "__main__":
     args = sys.argv
+
+    # Train
     if args[1] == "train":
         sequences = load_sequences_from_file(args[2])
         crf = CRF()
@@ -586,6 +584,8 @@ if __name__ == "__main__":
         end = time.time()
         print(f"Time: {end-start}")
         crf.save_weights("nlp/pos/my_weights")
+
+    # Test accuracy of learned weights
     elif args[1] == "test":
         crf = CRF()
         sequences = load_sequences_from_file(args[3], 10)
@@ -600,6 +600,8 @@ if __name__ == "__main__":
             total += torch.sum(batch.Y).item()
         print(crf.batch2seq(Batch(Y_hat[:10, :, :], batch.X[:10, :, :])))
         print(f"correct: {correct} total: {total} {100*round(correct/total, 2)}%")
+
+    # Run on some toy examples
     elif args[1] == "toy":
         sequences = [
             Sequence(["i", "eat", "pancakes"], ["N", "V", "N"]),
